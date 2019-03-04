@@ -50,8 +50,8 @@ pub fn get_server_config() -> impl Future<Item = DSLReportsResponse, Error = hyp
 }
 
 /// ping every server in `.servers` and sort by nanoseconds ping
-pub fn get_servers_sorted_by_ping() -> impl Future<Item = Vec<(String, u64)>, Error = hyper::Error>
-{
+pub fn get_servers_sorted_by_ping(
+) -> impl Future<Item = (Vec<String>, Vec<u64>), Error = hyper::Error> {
   get_server_config().and_then(|response| {
     stream::iter_ok(response.servers)
       .and_then(|server| {
@@ -68,7 +68,9 @@ pub fn get_servers_sorted_by_ping() -> impl Future<Item = Vec<(String, u64)>, Er
       .collect()
       .and_then(|mut pings| {
         pings.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        Ok(pings)
+        let servers = pings.iter().map(|a| a.0.to_owned()).collect();
+        let server_ping_times = pings.iter().map(|a| a.1).collect();
+        Ok((servers, server_ping_times))
       })
   })
 }
@@ -88,10 +90,9 @@ pub fn get_download_speed_stream(
 
       Ok(response.into_body().filter_map(move |chunk| {
         let now = precise_time_ns();
-        let current_bytes = chunk.as_ref().len() as u64;
-
         let total_nanoseconds = now - start_time;
-        total_bytes += current_bytes;
+
+        total_bytes += chunk.as_ref().len() as u64;
 
         if total_nanoseconds > 1_000_000_000 {
           let a = Some((total_bytes, total_nanoseconds));
@@ -111,8 +112,8 @@ pub fn get_download_speed_stream(
 fn test_asdf() {
   rt::run(rt::lazy(|| {
     get_servers_sorted_by_ping()
-      .and_then(|servers| {
-        let server = (&servers[0].0).to_owned();
+      .and_then(|(servers, _pings)| {
+        let server = servers[0].to_owned();
         get_download_speed_stream(server).and_then(|stream| {
           stream.for_each(|(total_bytes, total_nanoseconds)| {
             let rate =
