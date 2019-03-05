@@ -1,10 +1,11 @@
 use futures::stream;
 use hyper::{
   self,
-  rt::{self, Future, Stream},
+  rt::{Future, Stream},
   Client,
 };
 use hyper_tls::HttpsConnector;
+use log::*;
 use serde::Deserialize;
 use serde_json::*;
 use time::precise_time_ns;
@@ -34,6 +35,7 @@ pub struct DSLReportsResponsePrefs {
 pub fn get_server_config() -> impl Future<Item = DSLReportsResponse, Error = hyper::Error> {
   let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new(4).unwrap());
 
+  info!("get_server_config");
   client
     .get(
       "https://api.dslreports.com/speedtest/1.0/?typ=p&plat=10&apikey=12345678"
@@ -52,19 +54,25 @@ pub fn get_server_config() -> impl Future<Item = DSLReportsResponse, Error = hyp
 /// ping every server in `.servers` and sort by nanoseconds ping
 pub fn get_servers_sorted_by_ping(
 ) -> impl Future<Item = (Vec<String>, Vec<u64>), Error = hyper::Error> {
+  info!("get_servers_sorted_by_ping");
+
   get_server_config().and_then(|response| {
     stream::iter_ok(response.servers)
       .and_then(|server| {
-        let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new(4).unwrap());
+        Ok(futures::lazy(|| {
+          let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new(4).unwrap());
 
-        let start_time = precise_time_ns();
-        client
-          .get(format!("{}/front/0k", server).parse().unwrap())
-          .then(move |result| match result {
-            Ok(_) => Ok((server, precise_time_ns() - start_time)),
-            Err(_) => Ok((server, !0)),
-          })
+          let start_time = precise_time_ns();
+
+          client
+            .get(format!("{}/front/0k", server.clone()).parse().unwrap())
+            .then(move |result| match result {
+              Ok(_) => Ok((server, precise_time_ns() - start_time)),
+              Err(_) => Ok((server, !0)),
+            })
+        }))
       })
+      .buffer_unordered(4)
       .collect()
       .and_then(|mut pings| {
         pings.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -81,7 +89,7 @@ pub fn get_download_speed_stream(
 {
   let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new(4).unwrap());
 
-  println!("starting download {}", server);
+  info!("get_download_speed_stream {}", server);
   client
     .get(format!("{}/front/k", server).parse().unwrap())
     .and_then(|response| {
@@ -110,6 +118,11 @@ pub fn get_download_speed_stream(
 
 #[test]
 fn test_asdf() {
+  env_logger::Builder::from_default_env()
+    .filter(None, log::LevelFilter::Info)
+    .init();
+  use hyper::rt;
+
   rt::run(rt::lazy(|| {
     get_servers_sorted_by_ping()
       .and_then(|(servers, _pings)| {
