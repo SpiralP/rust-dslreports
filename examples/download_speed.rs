@@ -17,8 +17,9 @@ fn main() {
           .and_then(move |server| {
             let map = map.clone();
             Ok(futures::lazy(move || {
-              get_download_speed_stream(server.clone()).and_then(move |stream| {
+              get_download_speed_stream(server.clone(), 100).and_then(move |stream| {
                 stream.for_each(move |(total_bytes, total_nanoseconds)| {
+                  // MB/s
                   let rate = ((total_bytes as f64) / 1_000_000.0)
                     / ((total_nanoseconds as f64) / 1_000_000_000.0);
 
@@ -33,7 +34,7 @@ fn main() {
                     total
                   };
 
-                  println!("total rate: {}", total);
+                  println!("total Mbps: {:.1}", total * 8.0);
 
                   Ok(())
                 })

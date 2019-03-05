@@ -4,6 +4,8 @@ use log::*;
 use serde::Deserialize;
 use time::precise_time_ns;
 
+const API_KEY: &str = "12345678"; // test key
+
 #[derive(Debug, Deserialize)]
 pub struct DSLReportsResponse {
   locations: Vec<String>,
@@ -28,12 +30,15 @@ pub struct DSLReportsResponsePrefs {
 
 pub fn get_server_config() -> impl Future<Item = DSLReportsResponse, Error = Error> {
   info!("get_server_config");
-  client::get("https://api.dslreports.com/speedtest/1.0/?typ=p&plat=10&apikey=12345678")
-    .finish()
-    .unwrap()
-    .send()
-    .map_err(Error::from)
-    .and_then(|response| response.json().from_err().and_then(Ok))
+  client::get(&format!(
+    "https://api.dslreports.com/speedtest/1.0/?typ=p&plat=10&apikey={}",
+    API_KEY
+  ))
+  .finish()
+  .unwrap()
+  .send()
+  .map_err(Error::from)
+  .and_then(|response| response.json().from_err().and_then(Ok))
 }
 
 #[test]
@@ -100,8 +105,10 @@ fn test_get_servers_sorted_by_ping() {
     .unwrap();
 }
 
+/// returns a Future<Stream> where the stream will output (bytes, time) every `update_interval` milliseconds
 pub fn get_download_speed_stream(
   server: String,
+  update_interval: u16,
 ) -> impl Future<Item = impl Stream<Item = (u64, u64), Error = Error>, Error = Error> {
   info!("get_download_speed_stream {}", server);
   client::get(&format!("{}/front/k", server))
@@ -110,7 +117,7 @@ pub fn get_download_speed_stream(
     .send()
     .timeout(std::time::Duration::from_secs(60)) // TODO
     .map_err(Error::from)
-    .and_then(|response| {
+    .and_then(move |response| {
       let mut total_bytes = 0;
       let mut start_time = precise_time_ns();
 
@@ -120,7 +127,7 @@ pub fn get_download_speed_stream(
 
         total_bytes += chunk.as_ref().len() as u64;
 
-        if total_nanoseconds > 1_000_000_000 {
+        if total_nanoseconds >= (1_000_000 * u64::from(update_interval)) {
           let a = Some((total_bytes, total_nanoseconds));
 
           start_time = now;
@@ -146,40 +153,25 @@ fn test_get_download_speed_stream() {
   actix::spawn(
     get_servers_sorted_by_ping()
       .and_then(|(servers, _pings)| {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
-        let map: Arc<Mutex<HashMap<String, f64>>> = Arc::new(Mutex::new(HashMap::new()));
-
         stream::iter_ok(servers)
-          .take(4)
+          .take(1)
           .and_then(move |server| {
-            let map = map.clone();
             Ok(futures::lazy(move || {
-              get_download_speed_stream(server.clone()).and_then(move |stream| {
+              get_download_speed_stream(server.clone(), 1000).and_then(move |stream| {
                 stream.for_each(move |(total_bytes, total_nanoseconds)| {
                   let rate = ((total_bytes as f64) / 1_000_000.0)
                     / ((total_nanoseconds as f64) / 1_000_000_000.0);
 
-                  let total = {
-                    let mut map = map.lock().unwrap();
-                    map.insert(server.clone(), rate);
+                  info!("{}", rate);
 
-                    let mut total = 0.0;
-                    for n in map.values() {
-                      total += n;
-                    }
-                    total
-                  };
-
-                  info!("total rate: {}", total);
-                  info!("rate: {} {}", server, rate);
+                  actix::System::current().stop();
 
                   Ok(())
                 })
               })
             }))
           })
-          .buffer_unordered(4)
+          .buffer_unordered(1)
           .collect()
       })
       .map(|_| ())
