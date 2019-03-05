@@ -142,7 +142,8 @@ fn test_get_download_speed_stream() {
 
   sys
     .block_on(get_servers_sorted_by_ping().and_then(|(servers, _pings)| {
-      stream::iter_ok(vec![servers[0].to_owned(), servers[1].to_owned()])
+      stream::iter_ok(servers)
+        .take(4)
         .and_then(|server| {
           Ok(futures::lazy(move || {
             get_download_speed_stream(server.clone()).and_then(move |stream| {
@@ -157,7 +158,7 @@ fn test_get_download_speed_stream() {
             })
           }))
         })
-        .buffer_unordered(2)
+        .buffer_unordered(4)
         .collect()
     }))
     .unwrap();
