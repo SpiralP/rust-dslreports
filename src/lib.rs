@@ -1,4 +1,4 @@
-use actix_web::{actix, client, Error, HttpMessage};
+use actix_web::{client, Error, HttpMessage};
 use futures::{stream, Future, Stream};
 use log::*;
 use serde::Deserialize;
@@ -42,6 +42,7 @@ fn test_get_server_config() {
     .filter(None, log::LevelFilter::Info)
     .init();
 
+  use actix_web::actix;
   let mut sys = actix::System::new("test_get_server_config");
 
   sys
@@ -88,6 +89,7 @@ fn test_get_servers_sorted_by_ping() {
     .filter(None, log::LevelFilter::Info)
     .init();
 
+  use actix_web::actix;
   let mut sys = actix::System::new("test_get_servers_sorted_by_ping");
 
   sys
@@ -138,6 +140,7 @@ fn test_get_download_speed_stream() {
     .filter(None, log::LevelFilter::Info)
     .init();
 
+  use actix_web::actix;
   let mut sys = actix::System::new("test_get_download_speed_stream");
 
   sys
