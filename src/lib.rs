@@ -137,32 +137,39 @@ pub fn get_download_speed_stream(
 #[test]
 fn test_get_download_speed_stream() {
   env_logger::Builder::from_default_env()
-    .filter(None, log::LevelFilter::Info)
+    .filter(Some("dslreports"), log::LevelFilter::Info)
     .init();
 
   use actix_web::actix;
-  let mut sys = actix::System::new("test_get_download_speed_stream");
+  let sys = actix::System::new("test_get_download_speed_stream");
 
-  sys
-    .block_on(get_servers_sorted_by_ping().and_then(|(servers, _pings)| {
-      stream::iter_ok(servers)
-        .take(4)
-        .and_then(|server| {
-          Ok(futures::lazy(move || {
-            get_download_speed_stream(server.clone()).and_then(move |stream| {
-              stream.for_each(move |(total_bytes, total_nanoseconds)| {
-                let rate = ((total_bytes as f64) / 1_000_000.0)
-                  / ((total_nanoseconds as f64) / 1_000_000_000.0);
+  actix::spawn(
+    get_servers_sorted_by_ping()
+      .and_then(|(servers, _pings)| {
+        stream::iter_ok(servers)
+          .take(4)
+          .and_then(|server| {
+            Ok(futures::lazy(move || {
+              get_download_speed_stream(server.clone()).and_then(move |stream| {
+                stream.for_each(move |(total_bytes, total_nanoseconds)| {
+                  let rate = ((total_bytes as f64) / 1_000_000.0)
+                    / ((total_nanoseconds as f64) / 1_000_000_000.0);
 
-                info!("rate: {} {}", server, rate);
+                  info!("rate: {} {}", server, rate);
 
-                Ok(())
+                  actix::System::current().stop();
+
+                  Ok(())
+                })
               })
-            })
-          }))
-        })
-        .buffer_unordered(4)
-        .collect()
-    }))
-    .unwrap();
+            }))
+          })
+          .buffer_unordered(4)
+          .collect()
+      })
+      .map(|_| ())
+      .map_err(|_| ()),
+  );
+
+  sys.run();
 }
