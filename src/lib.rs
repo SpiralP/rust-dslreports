@@ -1,13 +1,7 @@
-use futures::stream;
-use hyper::{
-  self,
-  rt::{Future, Stream},
-  Client,
-};
-use hyper_tls::HttpsConnector;
+use actix_web::{actix, client, Error, HttpMessage};
+use futures::{stream, Future, Stream};
 use log::*;
 use serde::Deserialize;
-use serde_json::*;
 use time::precise_time_ns;
 
 #[derive(Debug, Deserialize)]
@@ -32,40 +26,46 @@ pub struct DSLReportsResponsePrefs {
   https: u8,
 }
 
-pub fn get_server_config() -> impl Future<Item = DSLReportsResponse, Error = hyper::Error> {
-  let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new(4).unwrap());
-
+pub fn get_server_config() -> impl Future<Item = DSLReportsResponse, Error = Error> {
   info!("get_server_config");
-  client
-    .get(
-      "https://api.dslreports.com/speedtest/1.0/?typ=p&plat=10&apikey=12345678"
-        .parse()
-        .unwrap(),
-    )
-    .and_then(|response| {
-      response.into_body().concat2().and_then(|body| {
-        let parsed: DSLReportsResponse = from_reader(body.as_ref()).unwrap();
+  client::get("https://api.dslreports.com/speedtest/1.0/?typ=p&plat=10&apikey=12345678")
+    .finish()
+    .unwrap()
+    .send()
+    .map_err(Error::from)
+    .and_then(|response| response.json().from_err().and_then(Ok))
+}
 
-        Ok(parsed)
-      })
-    })
+#[test]
+fn test_get_server_config() {
+  env_logger::Builder::from_default_env()
+    .filter(None, log::LevelFilter::Info)
+    .init();
+
+  let mut sys = actix::System::new("test_get_server_config");
+
+  sys
+    .block_on(get_server_config().and_then(|response| {
+      info!("json: {:#?}", response);
+      Ok(())
+    }))
+    .unwrap();
 }
 
 /// ping every server in `.servers` and sort by nanoseconds ping
-pub fn get_servers_sorted_by_ping(
-) -> impl Future<Item = (Vec<String>, Vec<u64>), Error = hyper::Error> {
+pub fn get_servers_sorted_by_ping() -> impl Future<Item = (Vec<String>, Vec<u64>), Error = Error> {
   info!("get_servers_sorted_by_ping");
 
   get_server_config().and_then(|response| {
+    info!("???");
     stream::iter_ok(response.servers)
       .and_then(|server| {
         Ok(futures::lazy(|| {
-          let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new(4).unwrap());
-
           let start_time = precise_time_ns();
-
-          client
-            .get(format!("{}/front/0k", server.clone()).parse().unwrap())
+          client::get(&format!("{}/front/0k", server.clone()))
+            .finish()
+            .unwrap()
+            .send()
             .then(move |result| match result {
               Ok(_) => Ok((server, precise_time_ns() - start_time)),
               Err(_) => Ok((server, !0)),
@@ -83,20 +83,37 @@ pub fn get_servers_sorted_by_ping(
   })
 }
 
+#[test]
+fn test_get_servers_sorted_by_ping() {
+  env_logger::Builder::from_default_env()
+    .filter(None, log::LevelFilter::Info)
+    .init();
+
+  let mut sys = actix::System::new("test_get_servers_sorted_by_ping");
+
+  sys
+    .block_on(get_servers_sorted_by_ping().and_then(|(servers, _pings)| {
+      info!("sorted latency: {:#?}", servers);
+      Ok(())
+    }))
+    .unwrap();
+}
+
 pub fn get_download_speed_stream(
   server: String,
-) -> impl Future<Item = impl Stream<Item = (u64, u64), Error = hyper::Error>, Error = hyper::Error>
-{
-  let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new(4).unwrap());
-
+) -> impl Future<Item = impl Stream<Item = (u64, u64), Error = Error>, Error = Error> {
   info!("get_download_speed_stream {}", server);
-  client
-    .get(format!("{}/front/k", server).parse().unwrap())
+  client::get(&format!("{}/front/k", server))
+    .finish()
+    .unwrap()
+    .send()
+    .timeout(std::time::Duration::from_secs(60))
+    .map_err(Error::from)
     .and_then(|response| {
       let mut total_bytes = 0;
       let mut start_time = precise_time_ns();
 
-      Ok(response.into_body().filter_map(move |chunk| {
+      Ok(response.payload().from_err().filter_map(move |chunk| {
         let now = precise_time_ns();
         let total_nanoseconds = now - start_time;
 
@@ -117,28 +134,26 @@ pub fn get_download_speed_stream(
 }
 
 #[test]
-fn test_asdf() {
+fn test_get_download_speed_stream() {
   env_logger::Builder::from_default_env()
     .filter(None, log::LevelFilter::Info)
     .init();
-  use hyper::rt;
 
-  rt::run(rt::lazy(|| {
-    get_servers_sorted_by_ping()
-      .and_then(|(servers, _pings)| {
-        let server = servers[0].to_owned();
-        get_download_speed_stream(server).and_then(|stream| {
-          stream.for_each(|(total_bytes, total_nanoseconds)| {
-            let rate =
-              ((total_bytes as f64) / 1_000_000.0) / ((total_nanoseconds as f64) / 1_000_000_000.0);
+  let mut sys = actix::System::new("test_get_download_speed_stream");
 
-            println!("rate: {}", rate);
+  sys
+    .block_on(get_servers_sorted_by_ping().and_then(|(servers, _pings)| {
+      let server = servers[0].to_owned();
+      get_download_speed_stream(server).and_then(|stream| {
+        stream.for_each(|(total_bytes, total_nanoseconds)| {
+          let rate =
+            ((total_bytes as f64) / 1_000_000.0) / ((total_nanoseconds as f64) / 1_000_000_000.0);
 
-            Ok(())
-          })
+          info!("rate: {}", rate);
+
+          Ok(())
         })
       })
-      .map(|_| ())
-      .map_err(|_| ())
-  }));
+    }))
+    .unwrap();
 }
