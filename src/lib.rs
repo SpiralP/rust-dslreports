@@ -57,7 +57,6 @@ pub fn get_servers_sorted_by_ping() -> impl Future<Item = (Vec<String>, Vec<u64>
   info!("get_servers_sorted_by_ping");
 
   get_server_config().and_then(|response| {
-    info!("???");
     stream::iter_ok(response.servers)
       .and_then(|server| {
         Ok(futures::lazy(|| {
@@ -107,7 +106,7 @@ pub fn get_download_speed_stream(
     .finish()
     .unwrap()
     .send()
-    .timeout(std::time::Duration::from_secs(60))
+    .timeout(std::time::Duration::from_secs(60)) // TODO
     .map_err(Error::from)
     .and_then(|response| {
       let mut total_bytes = 0;
@@ -143,17 +142,23 @@ fn test_get_download_speed_stream() {
 
   sys
     .block_on(get_servers_sorted_by_ping().and_then(|(servers, _pings)| {
-      let server = servers[0].to_owned();
-      get_download_speed_stream(server).and_then(|stream| {
-        stream.for_each(|(total_bytes, total_nanoseconds)| {
-          let rate =
-            ((total_bytes as f64) / 1_000_000.0) / ((total_nanoseconds as f64) / 1_000_000_000.0);
+      stream::iter_ok(vec![servers[0].to_owned(), servers[1].to_owned()])
+        .and_then(|server| {
+          Ok(futures::lazy(move || {
+            get_download_speed_stream(server.clone()).and_then(move |stream| {
+              stream.for_each(move |(total_bytes, total_nanoseconds)| {
+                let rate = ((total_bytes as f64) / 1_000_000.0)
+                  / ((total_nanoseconds as f64) / 1_000_000_000.0);
 
-          info!("rate: {}", rate);
+                info!("rate: {} {}", server, rate);
 
-          Ok(())
+                Ok(())
+              })
+            })
+          }))
         })
-      })
+        .buffer_unordered(2)
+        .collect()
     }))
     .unwrap();
 }
