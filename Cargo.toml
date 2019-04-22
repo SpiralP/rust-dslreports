@@ -5,11 +5,14 @@ authors = ["SpiralP <spiral.palmer@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-serde = { version = "1.0.89", features = ["derive"] }
+serde = { version = "1.0.90", features = ["derive"] }
+serde_json = "1.0.39"
 time = "0.1.42"
-futures = "0.1.25"
+futures = "0.1.26"
 log = "0.4.6"
-actix-web = { version = "0.7.18", features = ["tls"] }
+hyper = "0.12.27"
+failure = "0.1.5"
+hyper-tls = "0.3.2"
 
 [dev-dependencies]
-env_logger = "0.6.0"
+env_logger = "0.6.1"

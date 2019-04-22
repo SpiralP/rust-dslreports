@@ -1,27 +1,28 @@
 use dslreports::*;
 use futures::{stream, Future, Stream};
+use std::{
+  collections::HashMap,
+  sync::{Arc, Mutex},
+};
 
 fn main() {
-  use actix_web::actix;
   let sys = actix::System::new("test_get_download_speed_stream");
 
   actix::spawn(
     get_servers_sorted_by_ping()
       .and_then(|(servers, _pings)| {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
         let map: Arc<Mutex<HashMap<String, f64>>> = Arc::new(Mutex::new(HashMap::new()));
 
         stream::iter_ok(servers)
-          .take(4)
+          .take(4) // take 4 best servers
           .and_then(move |server| {
             let map = map.clone();
             Ok(futures::lazy(move || {
               get_download_speed_stream(server.clone(), 100).and_then(move |stream| {
-                stream.for_each(move |(total_bytes, total_nanoseconds)| {
+                stream.for_each(move |(num_bytes, nanoseconds)| {
                   // MB/s
-                  let rate = ((total_bytes as f64) / 1_000_000.0)
-                    / ((total_nanoseconds as f64) / 1_000_000_000.0);
+                  let rate =
+                    ((num_bytes as f64) / 1_000_000.0) / ((nanoseconds as f64) / 1_000_000_000.0);
 
                   let total = {
                     let mut map = map.lock().unwrap();
@@ -41,12 +42,12 @@ fn main() {
               })
             }))
           })
-          .buffer_unordered(4)
+          .buffer_unordered(4) // run 4 concurrent futures
           .collect()
       })
       .map(|_| ())
       .map_err(|_| ()),
   );
 
-  sys.run();
+  sys.run().unwrap();
 }
