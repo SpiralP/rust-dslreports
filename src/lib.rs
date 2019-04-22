@@ -3,7 +3,7 @@ use futures::stream;
 use hyper::{
   self,
   client::HttpConnector,
-  rt::{self, lazy, Future, Stream},
+  rt::{lazy, Future, Stream},
   Client,
 };
 use hyper_tls::HttpsConnector;
@@ -71,7 +71,7 @@ fn test_get_server_config() {
     .filter(None, log::LevelFilter::Info)
     .init();
 
-  rt::run(lazy(|| {
+  hyper::rt::run(lazy(|| {
     get_server_config()
       .and_then(|response| {
         info!("json: {:#?}", response);
@@ -115,7 +115,7 @@ fn test_get_servers_sorted_by_ping() {
     .filter(None, log::LevelFilter::Info)
     .init();
 
-  rt::run(lazy(|| {
+  hyper::rt::run(lazy(|| {
     get_servers_sorted_by_ping()
       .and_then(|(servers, _pings)| {
         info!("sorted latency: {:#?}", servers);
@@ -169,8 +169,7 @@ fn test_get_download_speed_stream() {
     .filter(Some("dslreports"), log::LevelFilter::Info)
     .init();
 
-  rt::run(lazy(|| {
-
+  hyper::rt::run(lazy(|| {
     get_servers_sorted_by_ping()
       .and_then(|(servers, _pings)| {
         stream::iter_ok(servers)

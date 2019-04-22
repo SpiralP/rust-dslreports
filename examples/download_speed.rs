@@ -1,14 +1,16 @@
 use dslreports::*;
-use futures::{stream, Future, Stream};
+use futures::stream;
+use hyper::{
+  self,
+  rt::{self, lazy, Future, Stream},
+};
 use std::{
   collections::HashMap,
   sync::{Arc, Mutex},
 };
 
 fn main() {
-  let sys = actix::System::new("test_get_download_speed_stream");
-
-  actix::spawn(
+  rt::run(lazy(|| {
     get_servers_sorted_by_ping()
       .and_then(|(servers, _pings)| {
         let map: Arc<Mutex<HashMap<String, f64>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -17,7 +19,7 @@ fn main() {
           .take(4) // take 4 best servers
           .and_then(move |server| {
             let map = map.clone();
-            Ok(futures::lazy(move || {
+            Ok(lazy(move || {
               get_download_speed_stream(server.clone(), 100).and_then(move |stream| {
                 stream.for_each(move |(num_bytes, nanoseconds)| {
                   // MB/s
@@ -46,8 +48,6 @@ fn main() {
           .collect()
       })
       .map(|_| ())
-      .map_err(|_| ()),
-  );
-
-  sys.run().unwrap();
+      .map_err(|_| ())
+  }));
 }
