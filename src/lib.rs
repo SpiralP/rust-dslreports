@@ -16,22 +16,22 @@ const API_KEY: &str = "12345678"; // test key
 
 #[derive(Debug, Deserialize)]
 pub struct DSLReportsResponse {
-  locations: Vec<String>,
-  plat: String,
-  server_rids: Vec<String>,
-  locations_short: Vec<String>,
-  key: String,
-  ports: Vec<String>,
-  prefs: DSLReportsResponsePrefs,
-  dnsdom: Option<String>,
-  servers: Vec<String>,
-  ipaddr: String,
+  pub locations: Vec<String>,
+  pub plat: String,
+  pub server_rids: Vec<String>,
+  pub locations_short: Vec<String>,
+  pub key: String,
+  pub ports: Vec<String>,
+  pub prefs: DSLReportsResponsePrefs,
+  pub dnsdom: Option<String>,
+  pub servers: Vec<String>,
+  pub ipaddr: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DSLReportsResponsePrefs {
-  ipv6: u8,
-  https: u8,
+  pub ipv6: u8,
+  pub https: u8,
 }
 
 fn new_client() -> impl Future<Item = Client<HttpsConnector<HttpConnector>>, Error = Error> {
@@ -81,23 +81,25 @@ fn test_get_server_config() {
   }));
 }
 
+pub fn get_ping_from_server(server: String) -> impl Future<Item = (String, u64), Error = Error> {
+  new_client().and_then(move |client| {
+    let url = format!("{}/front/0k", server).parse().unwrap();
+
+    let start_time = precise_time_ns();
+    client.get(url).then(move |result| match result {
+      Ok(_) => Ok((server, precise_time_ns() - start_time)),
+      Err(_) => Ok((server, std::u64::MAX)),
+    })
+  })
+}
+
 /// ping every server in `.servers` and sort by nanoseconds ping
 pub fn get_servers_sorted_by_ping() -> impl Future<Item = (Vec<String>, Vec<u64>), Error = Error> {
   info!("get_servers_sorted_by_ping");
 
   get_server_config().and_then(|response| {
     stream::iter_ok(response.servers)
-      .and_then(|server| {
-        Ok(new_client().and_then(|client| {
-          let start_time = precise_time_ns();
-          client
-            .get(format!("{}/front/0k", server.clone()).parse().unwrap())
-            .then(move |result| match result {
-              Ok(_) => Ok((server, precise_time_ns() - start_time)),
-              Err(_) => Ok((server, std::u64::MAX)),
-            })
-        }))
-      })
+      .and_then(|server| Ok(get_ping_from_server(server)))
       .buffer_unordered(4)
       .collect()
       .and_then(|mut pings| {
@@ -125,7 +127,7 @@ fn test_get_servers_sorted_by_ping() {
   }));
 }
 
-/// returns a Future<Stream> where the stream will output (bytes, time) every `update_interval` milliseconds
+/// returns a Future<Stream> where the stream will output (bytes, nanoseconds) every `update_interval` milliseconds
 pub fn get_download_speed_stream(
   server: String,
   update_interval: u16,
