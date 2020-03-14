@@ -43,12 +43,8 @@ pub async fn get_server_config() -> Result<DSLReportsResponse, Error> {
 
 #[tokio::test]
 async fn test_get_server_config() {
-  env_logger::Builder::from_default_env()
-    .filter(None, log::LevelFilter::Info)
-    .init();
-
   let response = get_server_config().await.unwrap();
-  info!("json: {:#?}", response);
+  println!("json: {:#?}", response);
 }
 
 pub async fn get_ping_from_server(server: String) -> Result<Duration, Error> {
@@ -80,12 +76,8 @@ pub async fn get_servers_sorted_by_ping() -> Result<Vec<(String, Duration)>, Err
 
 #[tokio::test]
 async fn test_get_servers_sorted_by_ping() {
-  env_logger::Builder::from_default_env()
-    .filter(None, log::LevelFilter::Info)
-    .init();
-
   let pings = get_servers_sorted_by_ping().await.unwrap();
-  info!("sorted latency: {:#?}", pings);
+  println!("sorted latency: {:#?}", pings);
 }
 
 /// returns a Future<Stream> where the stream will output (bytes, duration) every `min_update_interval`
@@ -137,12 +129,9 @@ pub async fn get_download_speed_stream(
   )
 }
 
+#[ignore]
 #[tokio::test]
 async fn test_get_download_speed_stream() {
-  env_logger::Builder::from_default_env()
-    .filter(Some("dslreports"), log::LevelFilter::Info)
-    .init();
-
   let servers = get_servers_sorted_by_ping().await.unwrap();
   let server = &servers[0].0;
 
@@ -154,6 +143,6 @@ async fn test_get_download_speed_stream() {
     let (bytes, duration) = result.unwrap();
     let rate = ((bytes as f64) / 1_000_000.0) / duration.as_secs_f64();
 
-    info!("{} MB/s", rate);
+    println!("{} MB/s", rate);
   }
 }
