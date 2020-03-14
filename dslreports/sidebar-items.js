@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["get_download_speed_stream","returns a Future where the stream will output (bytes, duration) every `min_update_interval`"],["get_ping_from_server",""],["get_server_config",""],["get_servers_sorted_by_ping","ping every server in `.servers` and sort by nanoseconds ping"]],"struct":[["DSLReportsResponse",""],["DSLReportsResponsePrefs",""]]});
