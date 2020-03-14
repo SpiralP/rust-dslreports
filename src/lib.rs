@@ -1,18 +1,11 @@
 use failure::Error;
-use futures::stream;
-use hyper::{
-  self,
-  client::HttpConnector,
-  rt::{lazy, Future, Stream},
-  Client,
-};
-use hyper_tls::HttpsConnector;
+use futures::prelude::*;
 use log::*;
 use serde::Deserialize;
-use serde_json;
-use time::precise_time_ns;
+use std::time::{Duration, Instant};
 
-const API_KEY: &str = "12345678"; // test key
+// dslreport's test key
+const API_KEY: &str = "12345678";
 
 #[derive(Debug, Deserialize)]
 pub struct DSLReportsResponse {
@@ -34,166 +27,133 @@ pub struct DSLReportsResponsePrefs {
   pub https: u8,
 }
 
-fn new_client() -> impl Future<Item = Client<HttpsConnector<HttpConnector>>, Error = Error> {
-  lazy(|| {
-    let https = HttpsConnector::new(4)?;
-    let client = Client::builder().build::<_, hyper::Body>(https);
-    Ok(client)
-  })
-}
-
-pub fn get_server_config() -> impl Future<Item = DSLReportsResponse, Error = Error> {
+pub async fn get_server_config() -> Result<DSLReportsResponse, Error> {
   info!("get_server_config");
 
-  new_client().and_then(|client| {
-    client
-      .get(
-        format!(
-          "https://api.dslreports.com/speedtest/1.0/?typ=p&plat=10&apikey={}",
-          API_KEY
-        )
-        .parse()
-        .unwrap(),
-      )
-      .and_then(|response| response.into_body().concat2())
-      .from_err()
-      .and_then(|body| {
-        let json: DSLReportsResponse = serde_json::from_slice(&body)?;
-
-        Ok(json)
-      })
-  })
+  Ok(
+    reqwest::get(&format!(
+      "https://api.dslreports.com/speedtest/1.0/?typ=p&plat=10&apikey={}",
+      API_KEY
+    ))
+    .await?
+    .json()
+    .await?,
+  )
 }
 
-#[test]
-fn test_get_server_config() {
+#[tokio::test]
+async fn test_get_server_config() {
   env_logger::Builder::from_default_env()
     .filter(None, log::LevelFilter::Info)
     .init();
 
-  hyper::rt::run(lazy(|| {
-    get_server_config()
-      .and_then(|response| {
-        info!("json: {:#?}", response);
-        Ok(())
-      })
-      .map_err(|err| println!("err: {}", err))
-  }));
+  let response = get_server_config().await.unwrap();
+  info!("json: {:#?}", response);
 }
 
-pub fn get_ping_from_server(server: String) -> impl Future<Item = (String, u64), Error = Error> {
-  new_client().and_then(move |client| {
-    let url = format!("{}/front/0k", server).parse().unwrap();
+pub async fn get_ping_from_server(server: String) -> Result<Duration, Error> {
+  let start_time = Instant::now();
+  // head method??
+  reqwest::get(&format!("{}/front/0k", server)).await?;
+  let end_time = Instant::now();
 
-    let start_time = precise_time_ns();
-    client.get(url).then(move |result| match result {
-      Ok(_) => Ok((server, precise_time_ns() - start_time)),
-      Err(_) => Ok((server, std::u64::MAX)),
-    })
-  })
+  Ok(end_time - start_time)
 }
 
 /// ping every server in `.servers` and sort by nanoseconds ping
-pub fn get_servers_sorted_by_ping() -> impl Future<Item = (Vec<String>, Vec<u64>), Error = Error> {
+pub async fn get_servers_sorted_by_ping() -> Result<Vec<(String, Duration)>, Error> {
   info!("get_servers_sorted_by_ping");
 
-  get_server_config().and_then(|response| {
-    stream::iter_ok(response.servers)
-      .and_then(|server| Ok(get_ping_from_server(server)))
-      .buffer_unordered(4)
-      .collect()
-      .and_then(|mut pings| {
-        pings.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let servers = pings.iter().map(|a| a.0.to_owned()).collect();
-        let server_ping_times = pings.iter().map(|a| a.1).collect();
-        Ok((servers, server_ping_times))
-      })
-  })
+  let response = get_server_config().await?;
+
+  let mut pings: Vec<_> = stream::iter(response.servers)
+    .map(|server| async { (server.clone(), get_ping_from_server(server).await) })
+    .buffer_unordered(4)
+    .filter_map(|(server, result)| async { result.ok().map(|value| (server, value)) })
+    .collect()
+    .await;
+
+  pings.sort_unstable_by(|(_, ping1), (_, ping2)| ping1.partial_cmp(&ping2).unwrap());
+
+  Ok(pings)
 }
 
-#[test]
-fn test_get_servers_sorted_by_ping() {
+#[tokio::test]
+async fn test_get_servers_sorted_by_ping() {
   env_logger::Builder::from_default_env()
     .filter(None, log::LevelFilter::Info)
     .init();
 
-  hyper::rt::run(lazy(|| {
-    get_servers_sorted_by_ping()
-      .and_then(|(servers, _pings)| {
-        info!("sorted latency: {:#?}", servers);
-        Ok(())
-      })
-      .map_err(|err| println!("err: {}", err))
-  }));
+  let pings = get_servers_sorted_by_ping().await.unwrap();
+  info!("sorted latency: {:#?}", pings);
 }
 
-/// returns a Future<Stream> where the stream will output (bytes, nanoseconds) every `update_interval` milliseconds
-pub fn get_download_speed_stream(
+/// returns a Future<Stream> where the stream will output (bytes, duration) every `min_update_interval`
+pub async fn get_download_speed_stream(
   server: String,
-  update_interval: u16,
-) -> impl Future<Item = impl Stream<Item = (u64, u64), Error = Error>, Error = Error> {
+  min_update_interval: Duration,
+) -> Result<impl Stream<Item = Result<(usize, Duration), Error>>, Error> {
   info!("get_download_speed_stream {}", server);
 
-  new_client().and_then(move |client| {
-    client
-      .get(format!("{}/front/k", server).parse().unwrap())
-      .from_err()
-      .and_then(move |response| {
-        let body = response.into_body();
+  let stream = reqwest::get(&format!("{}/front/k", server))
+    .await?
+    .bytes_stream();
 
-        let mut total_bytes = 0;
-        let mut start_time = precise_time_ns();
+  let lock = std::sync::Arc::new(futures::lock::Mutex::new((0, Instant::now())));
 
-        Ok(body.from_err().filter_map(move |chunk| {
-          let now = precise_time_ns();
-          let total_nanoseconds = now - start_time;
+  Ok(
+    stream
+      .map_err(|err| err.into())
+      .try_filter_map(move |bytes| {
+        let lock = lock.clone();
 
-          total_bytes += chunk.as_ref().len() as u64;
+        async move {
+          let mut guard = lock.lock().await;
 
-          if total_nanoseconds >= (1_000_000 * u64::from(update_interval)) {
-            let a = Some((total_bytes, total_nanoseconds));
+          let (mut last_bytes, mut last_now) = *guard;
 
-            start_time = now;
-            total_bytes = 0;
+          let now = Instant::now();
+          let duration = now - last_now;
 
-            a
+          last_bytes += bytes.len();
+
+          let value = if duration >= min_update_interval {
+            let new_value = (last_bytes, duration);
+
+            last_now = now;
+            last_bytes = 0;
+
+            Some(new_value)
           } else {
             None
-          }
-        }))
+          };
+
+          *guard = (last_bytes, last_now);
+
+          Ok(value)
+        }
       })
-  })
+      .boxed(),
+  )
 }
 
-#[test]
-fn test_get_download_speed_stream() {
+#[tokio::test]
+async fn test_get_download_speed_stream() {
   env_logger::Builder::from_default_env()
     .filter(Some("dslreports"), log::LevelFilter::Info)
     .init();
 
-  hyper::rt::run(lazy(|| {
-    get_servers_sorted_by_ping()
-      .and_then(|(servers, _pings)| {
-        stream::iter_ok(servers)
-          .take(1)
-          .and_then(move |server| {
-            Ok(lazy(move || {
-              get_download_speed_stream(server.clone(), 1000).and_then(move |stream| {
-                stream.for_each(move |(total_bytes, total_nanoseconds)| {
-                  let rate = ((total_bytes as f64) / 1_000_000.0)
-                    / ((total_nanoseconds as f64) / 1_000_000_000.0);
+  let servers = get_servers_sorted_by_ping().await.unwrap();
+  let server = &servers[0].0;
 
-                  info!("{}", rate);
+  let mut stream = get_download_speed_stream(server.to_string(), Duration::from_secs(1))
+    .await
+    .unwrap();
 
-                  Ok(())
-                })
-              })
-            }))
-          })
-          .buffer_unordered(1)
-          .collect()
-      })
-      .map(|_| ())
-      .map_err(|_| ())
-  }));
+  while let Some(result) = stream.next().await {
+    let (bytes, duration) = result.unwrap();
+    let rate = ((bytes as f64) / 1_000_000.0) / duration.as_secs_f64();
+
+    info!("{} MB/s", rate);
+  }
 }
